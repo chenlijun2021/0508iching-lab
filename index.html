@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>易经美学实验室</title>
+    <title>卦象实验室</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&family=IBM+Plex+Mono:wght@400;500&display=swap');
@@ -12,6 +12,7 @@
             font-family: 'Inter', -apple-system, sans-serif; 
             -webkit-tap-highlight-color: transparent; 
             overscroll-behavior: none;
+            background-color: #F5F5F5;
         }
         .font-mono { font-family: 'IBM Plex Mono', monospace; }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
@@ -25,15 +26,12 @@
         .animate-scan-y { animation: scanY 2.5s ease-in-out infinite; }
 
         .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
-        .zoom-in-95 { animation: zoomIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-        @keyframes zoomIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-
-        .poster-container { user-select: none; -webkit-touch-callout: default; }
+        .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 20px); }
     </style>
 </head>
-<body class="bg-[#F0F0F0] h-full overflow-hidden">
+<body class="h-full overflow-hidden">
     <div id="app"></div>
 
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -44,7 +42,7 @@
         const { useState, useEffect, useRef } = React;
 
         // ==========================================
-        // ⚠️ 请在此处填入你的 API Key
+        // ⚠️ 必须在这里填入你的 API Key
         // ==========================================
         const apiKey = "AIzaSyCYKMGDDcji7woHeGjsyxnUkSJ7IBGf1P0"; 
 
@@ -73,9 +71,7 @@
             const [data, setData] = useState(null);
             const [theme, setTheme] = useState('lab');
             const [showPoster, setShowPoster] = useState(false);
-            const [generatedIllustration, setGeneratedIllustration] = useState(null);
-            const [isGeneratingImg, setIsGeneratingImg] = useState(false);
-            const [decryptText, setDecryptText] = useState('00000000');
+            const [decryptText, setDecryptText] = useState('READY');
             const [errorMsg, setErrorMsg] = useState('');
             const fileInputRef = useRef(null);
 
@@ -83,22 +79,10 @@
                 if (!loading) return;
                 const interval = setInterval(() => {
                     setDecryptText(Math.random().toString(36).substring(2, 10).toUpperCase());
-                }, 80);
+                }, 100);
                 return () => clearInterval(interval);
             }, [loading]);
 
-            const extractJSON = (text) => {
-                try {
-                    const markdownMatch = text.match(/```json\s*([\s\S]*?)\s*```/) || text.match(/```\s*([\s\S]*?)\s*```/);
-                    if (markdownMatch) return JSON.parse(markdownMatch[1].trim());
-                    const start = text.indexOf('{');
-                    const end = text.lastIndexOf('}');
-                    if (start !== -1 && end !== -1) return JSON.parse(text.substring(start, end + 1).trim());
-                    return JSON.parse(text.trim());
-                } catch (e) { throw new Error("解析数据失败，请重试。"); }
-            };
-
-            // 图像压缩逻辑
             const compressImage = (file) => {
                 return new Promise((resolve) => {
                     const reader = new FileReader();
@@ -108,87 +92,106 @@
                         img.src = e.target.result;
                         img.onload = () => {
                             const canvas = document.createElement('canvas');
-                            const MAX_WIDTH = 800; // 微信环境压缩至800宽足够
+                            const MAX_WIDTH = 750; 
                             const scale = MAX_WIDTH / img.width;
                             canvas.width = MAX_WIDTH;
                             canvas.height = img.height * scale;
                             const ctx = canvas.getContext('2d');
                             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                            resolve(canvas.toDataURL('image/jpeg', 0.7)); // 压缩为 0.7 质量的 JPEG
+                            resolve(canvas.toDataURL('image/jpeg', 0.6).split(',')[1]);
                         };
                     };
                 });
             };
 
-            const runProtocol = async (base64Image) => {
+            const callAPI = async (model, base64Data) => {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{
+                            parts: [
+                                { text: "你是一个易经与美学专家。分析这张手掌照片。必须严格返回JSON格式，不要有任何多余说明文字：{\"hexagram\":\"卦名\",\"core_insight\":\"一段100字内的核心分析\",\"poster_quote\":\"一句哲思金句\",\"aesthetic_guide\":{\"color_hex\":\"#HEX\",\"outfit_detail\":\"穿搭建议\",\"vibe\":\"气质关键词\"}}" },
+                                { inlineData: { mimeType: "image/jpeg", data: base64Data } }
+                            ]
+                        }]
+                    })
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.error?.message || response.status);
+                }
+                
+                const res = await response.json();
+                const text = res.candidates?.[0]?.content?.parts?.[0]?.text;
+                const jsonStr = text.match(/\{[\s\S]*\}/)[0];
+                return JSON.parse(jsonStr);
+            };
+
+            const handleUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                if (!apiKey) {
+                    setErrorMsg("请先在代码中配置 API Key");
+                    return;
+                }
+
                 setLoading(true);
                 setErrorMsg('');
                 
-                // 修正模型名称和请求端点
-                const model = "gemini-2.5-flash-preview-09-2025";
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-                
-                const prompt = `作为易经命理实验室AI，请分析这张掌纹。必须严格输出JSON：{"protocol_id": "ARCHIVE-8821","hexagram": "卦名","core_insight": "针对纹路给出3句观测记录","poster_quote": "一句有哲理的金句","metrics": {"天": 80, "地": 70, "人": 60},"aesthetic_guide": {"color_name": "建议色","color_hex": "#HEX","outfit_detail": "穿戴建议","vibe": "气质关键词"},"illustration_prompt": "a simple noun of a healing object in English"}`;
-                
                 try {
-                    if (!apiKey) throw new Error("API Key 缺失");
-
-                    const response = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{
-                                parts: [
-                                    { text: prompt },
-                                    { inlineData: { mimeType: "image/jpeg", data: base64Image.split(',')[1] } }
-                                ]
-                            }]
-                        })
-                    });
+                    const base64 = await compressImage(file);
                     
-                    const resData = await response.json();
-                    if (resData.error) throw new Error(resData.error.message);
+                    // 尝试多个模型以规避 404
+                    const models = ["gemini-1.5-flash", "gemini-1.5-pro"];
+                    let result = null;
+                    let lastError = "";
 
-                    const text = resData.candidates?.[0]?.content?.parts?.[0]?.text;
-                    const json = extractJSON(text);
-                    setData(json);
-                    setStep('report');
+                    for (let m of models) {
+                        try {
+                            result = await callAPI(m, base64);
+                            if (result) break;
+                        } catch (err) {
+                            lastError = err.message;
+                            console.warn(`${m} 尝试失败:`, err);
+                        }
+                    }
+
+                    if (result) {
+                        setData(result);
+                        setStep('report');
+                    } else {
+                        setErrorMsg(`服务连接失败: ${lastError}`);
+                    }
                 } catch (err) {
-                    setErrorMsg("服务连接失败，请检查网络或 Key 额度");
-                    console.error(err);
+                    setErrorMsg("系统解析异常，请稍后重试");
                 } finally {
                     setLoading(false);
                 }
             };
 
-            const handleUpload = async (e) => {
-                const file = e.target.files[0];
-                if (file) {
-                    setLoading(true);
-                    const compressed = await compressImage(file);
-                    runProtocol(compressed);
-                }
-            };
-
             const c = theme === 'lab' ? 
-                { bg: 'bg-[#F0F0F0]', card: 'bg-white', text: 'text-[#121212]', accent: 'border-[#E0E0E0]' } : 
-                { bg: 'bg-[#E8DDC3]', card: 'bg-[#F2EBD7]', text: 'text-[#483A2C]', accent: 'border-[#D0C4A8]' };
+                { bg: 'bg-[#F5F5F5]', card: 'bg-white', text: 'text-[#121212]', accent: 'border-[#EEEEEE]' } : 
+                { bg: 'bg-[#EAE1D2]', card: 'bg-[#F4F0E6]', text: 'text-[#3E2F20]', accent: 'border-[#D9CDBA]' };
 
             return (
-                <div className={`fixed inset-0 ${c.bg} flex items-center justify-center p-0 sm:p-4 transition-colors duration-700`}>
-                    <div className={`w-full h-full sm:max-w-[400px] sm:h-[844px] sm:rounded-[2.5rem] ${c.card} ${c.text} shadow-2xl overflow-hidden relative flex flex-col border-none sm:border sm:border-black/5`}>
+                <div className={`fixed inset-0 ${c.bg} flex items-center justify-center transition-colors duration-500`}>
+                    <div className={`w-full h-full sm:max-w-[400px] sm:max-h-[812px] sm:rounded-[2.5rem] ${c.card} ${c.text} shadow-2xl relative flex flex-col overflow-hidden`}>
                         
                         {errorMsg && (
-                            <div className="absolute top-20 left-4 right-4 bg-black text-white text-[10px] p-4 rounded-xl z-[100] animate-fade-in flex justify-between">
+                            <div className="absolute top-20 left-4 right-4 bg-black text-white text-[11px] p-4 rounded-xl z-[100] animate-fade-in shadow-xl flex justify-between">
                                 <span>⚠️ {errorMsg}</span>
-                                <button onClick={() => setErrorMsg('')}>[关闭]</button>
+                                <button onClick={() => setErrorMsg('')} className="font-bold underline">关闭</button>
                             </div>
                         )}
 
-                        <header className={`pt-12 p-6 pb-4 border-b ${c.accent} flex justify-between items-center bg-inherit z-20`}>
+                        <header className={`pt-12 p-8 flex justify-between items-center bg-inherit z-20`}>
                             <div className="space-y-0.5">
-                                <h2 className="text-sm font-black tracking-tighter uppercase">Yi Jing Lab</h2>
-                                <p className="text-[9px] opacity-30 font-mono tracking-widest">Protocol v5.0_FINAL</p>
+                                <h2 className="text-[10px] font-black tracking-[0.2em] uppercase opacity-40">AESTHETIC LAB</h2>
+                                <h1 className="text-xl font-black tracking-tight">易经美学实验室</h1>
                             </div>
                             <div className="flex bg-black/5 p-1 rounded-full scale-90">
                                 <button onClick={() => setTheme('lab')} className={`px-4 py-1 rounded-full text-[10px] font-bold ${theme === 'lab' ? 'bg-white shadow-sm' : 'opacity-30'}`}>工业</button>
@@ -196,29 +199,28 @@
                             </div>
                         </header>
 
-                        <main className="flex-1 overflow-y-auto scrollbar-hide">
+                        <main className="flex-1 overflow-y-auto scrollbar-hide p-8">
                             {step === 'entry' ? (
-                                <div className="p-8 h-full flex flex-col animate-fade-in">
-                                    <div className="mt-6 space-y-4">
-                                        <h1 className="text-[42px] font-black leading-[0.9] tracking-tighter">拓扑<br/>解析</h1>
-                                        <div className="h-0.5 w-8 bg-current opacity-20"></div>
-                                        <p className="text-xs leading-relaxed opacity-60">请拍摄一张清晰的掌纹照片。<br/>AI 将根据纹理走向解析您的当下能量场。</p>
+                                <div className="h-full flex flex-col animate-fade-in">
+                                    <div className="mt-4 space-y-3">
+                                        <div className="h-1 w-6 bg-current opacity-20"></div>
+                                        <p className="text-xs leading-relaxed opacity-50">上传清晰的掌纹图像，由 AI 系统解析您的易经卦象与美学能量。</p>
                                     </div>
                                     <div className="flex-1 flex items-center justify-center">
-                                        <div onClick={() => !loading && fileInputRef.current.click()} className={`w-full aspect-square border-2 border-dashed ${c.accent} rounded-[2rem] flex flex-col items-center justify-center relative overflow-hidden transition-all ${loading ? 'bg-black/5' : 'active:bg-black/5 active:scale-95'}`}>
+                                        <div onClick={() => !loading && fileInputRef.current.click()} className={`w-full aspect-square border-2 border-dashed ${c.accent} rounded-[2.5rem] flex flex-col items-center justify-center relative overflow-hidden transition-all ${loading ? 'bg-black/5' : 'active:scale-95 cursor-pointer hover:bg-black/5'}`}>
                                             {loading ? (
-                                                <div className="flex flex-col items-center space-y-5">
+                                                <div className="flex flex-col items-center space-y-4">
                                                     <Icons.Loading />
                                                     <div className="text-center">
-                                                        <div className="text-[11px] font-black tracking-widest animate-pulse">解析样本中...</div>
-                                                        <div className="text-[9px] font-mono opacity-40 uppercase">{decryptText}</div>
+                                                        <div className="text-[10px] font-bold tracking-widest animate-pulse">正在处理数据流...</div>
+                                                        <div className="text-[9px] font-mono opacity-30 mt-1 uppercase tracking-tight">{decryptText}</div>
                                                     </div>
                                                     <div className="absolute top-0 left-0 w-full h-1 bg-current opacity-20 animate-scan-y"></div>
                                                 </div>
                                             ) : (
-                                                <div className="flex flex-col items-center animate-fade-in">
-                                                    <div className="p-4 bg-current/5 rounded-full mb-4"><Icons.Scan /></div>
-                                                    <span className="text-xs font-bold opacity-40 tracking-widest">点击开始解析</span>
+                                                <div className="flex flex-col items-center opacity-20">
+                                                    <Icons.Scan />
+                                                    <span className="text-[10px] font-bold mt-4 tracking-widest">点击开始解析</span>
                                                 </div>
                                             )}
                                         </div>
@@ -226,27 +228,32 @@
                                     <input type="file" ref={fileInputRef} className="hidden" onChange={handleUpload} accept="image/*" />
                                 </div>
                             ) : (
-                                <div className="p-8 space-y-10 animate-fade-in pb-32">
-                                    <div className="space-y-2">
-                                        <div className="text-[10px] font-bold opacity-20 font-mono tracking-widest uppercase">Analysis Complete</div>
+                                <div className="space-y-8 animate-fade-in pb-20">
+                                    <div className="space-y-1">
+                                        <div className="text-[9px] font-bold opacity-30 font-mono tracking-widest uppercase">Result Archive</div>
                                         <h1 className="text-5xl font-black tracking-tighter">{data.hexagram}卦</h1>
                                     </div>
-                                    <div className="space-y-4">
-                                        <div className="text-[11px] font-black opacity-30 tracking-[0.2em] border-b pb-2 border-current/10 uppercase">观测报告</div>
-                                        <p className="text-[13px] leading-relaxed text-justify opacity-90">{data.core_insight}</p>
+                                    <div className="space-y-3">
+                                        <div className="text-[10px] font-bold opacity-30 tracking-widest border-b pb-2 border-current/10 uppercase">核心启示</div>
+                                        <p className="text-[14px] leading-relaxed text-justify opacity-80">{data.core_insight}</p>
                                     </div>
-                                    <div className="p-6 border border-current/10 rounded-[1.5rem] bg-black/[0.02] space-y-6">
-                                        <div className="text-[11px] font-black opacity-30 tracking-[0.2em] uppercase text-center">美学介入建议</div>
-                                        <div className="flex items-center justify-center space-x-6">
-                                            <div className="w-14 h-14 rounded-full shadow-inner border border-black/5" style={{ backgroundColor: data.aesthetic_guide.color_hex }}></div>
-                                            <div className="space-y-0.5">
-                                                <div className="text-xs font-bold">{data.aesthetic_guide.color_name}</div>
-                                                <div className="text-[9px] opacity-30 font-mono uppercase">{data.aesthetic_guide.color_hex}</div>
+                                    <div className={`p-6 border ${c.accent} rounded-[2rem] bg-current/[0.02] space-y-6`}>
+                                        <div className="flex items-center justify-between">
+                                            <div className="w-12 h-12 rounded-full border-4 border-white shadow-sm" style={{ backgroundColor: data.aesthetic_guide.color_hex }}></div>
+                                            <div className="text-right">
+                                                <div className="text-[9px] font-bold opacity-30 uppercase mb-0.5">Theme Color</div>
+                                                <div className="text-xs font-mono font-bold">{data.aesthetic_guide.color_hex}</div>
                                             </div>
                                         </div>
-                                        <div className="grid grid-cols-2 gap-4 pt-2">
-                                            <div className="text-[11px]"><span className="font-bold opacity-30 block text-[9px] mb-1 uppercase tracking-tighter">Outfit</span>{data.aesthetic_guide.outfit_detail}</div>
-                                            <div className="text-[11px]"><span className="font-bold opacity-30 block text-[9px] mb-1 uppercase tracking-tighter">Vibe</span>{data.aesthetic_guide.vibe}</div>
+                                        <div className="grid grid-cols-2 gap-4 border-t border-current/5 pt-4">
+                                            <div>
+                                                <span className="block text-[9px] font-bold opacity-30 uppercase mb-1">穿搭建议</span>
+                                                <p className="text-[11px] font-bold leading-tight">{data.aesthetic_guide.outfit_detail}</p>
+                                            </div>
+                                            <div>
+                                                <span className="block text-[9px] font-bold opacity-30 uppercase mb-1">气质关键词</span>
+                                                <p className="text-[11px] font-bold leading-tight">{data.aesthetic_guide.vibe}</p>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -254,36 +261,28 @@
                         </main>
 
                         {step === 'report' && (
-                            <div className="absolute bottom-0 left-0 right-0 p-6 pb-10 bg-inherit/80 backdrop-blur-md border-t border-current/5 flex space-x-3 z-30">
-                                <button onClick={() => setStep('entry')} className="h-14 px-6 border border-current/10 rounded-2xl flex items-center justify-center font-bold text-xs opacity-40">重启</button>
-                                <button onClick={() => setShowPoster(true)} className="flex-1 h-14 bg-[#111111] text-white rounded-2xl text-[11px] font-bold tracking-[0.2em] active:scale-95 shadow-xl">生成分享手账</button>
+                            <div className="p-8 pb-10 bg-inherit border-t border-current/5 flex space-x-2 safe-bottom z-30">
+                                <button onClick={() => setStep('entry')} className="h-14 px-5 border border-current/10 rounded-2xl flex items-center justify-center opacity-30 active:scale-95">
+                                    <Icons.Scan />
+                                </button>
+                                <button onClick={() => setShowPoster(true)} className="flex-1 h-14 bg-black text-white rounded-2xl text-[11px] font-black tracking-widest uppercase active:scale-95 shadow-xl">生成分析海报</button>
                             </div>
                         )}
 
                         {showPoster && (
-                            <div className="absolute inset-0 z-[100] bg-black/95 backdrop-blur-2xl p-6 flex flex-col items-center justify-center animate-fade-in">
-                                <div className="w-full max-w-[340px] aspect-[4/6] bg-white rounded-[2.5rem] p-8 flex flex-col relative overflow-hidden shadow-2xl text-[#111111] poster-container">
-                                    <header className="flex justify-between items-start mb-4">
-                                        <div className="text-3xl font-black tracking-tighter">{data.hexagram}卦</div>
-                                        <div className="text-[8px] font-mono opacity-20 text-right uppercase">Private<br/>Archive</div>
-                                    </header>
-                                    <div className="h-px w-full bg-black/5 mb-8"></div>
-                                    <div className="flex-1 flex flex-col justify-center items-center text-center">
-                                        <div className="text-[20px] font-bold leading-tight px-4">“ {data.poster_quote} ”</div>
-                                        <div className="text-[10px] opacity-30 mt-6 tracking-widest font-mono">LAB RECORD // {data.protocol_id}</div>
+                            <div className="absolute inset-0 z-[100] bg-black/95 backdrop-blur-xl p-6 flex flex-col items-center justify-center animate-fade-in">
+                                <div className="w-full max-w-[300px] aspect-[4/6] bg-white rounded-[2rem] p-10 flex flex-col shadow-2xl text-[#111111] relative overflow-hidden">
+                                    <h2 className="text-3xl font-black mb-6">{data.hexagram}卦</h2>
+                                    <div className="flex-1 flex items-center justify-center text-center">
+                                        <p className="text-[20px] font-bold leading-tight italic">“{data.poster_quote}”</p>
                                     </div>
-                                    <footer className="mt-auto pt-8 flex justify-between items-end border-t border-black/5">
-                                        <div className="flex items-center space-x-2">
-                                            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: data.aesthetic_guide.color_hex }}></div>
-                                            <span className="text-[9px] font-bold opacity-40">{data.aesthetic_guide.color_name}</span>
-                                        </div>
-                                        <div className="text-[7px] font-mono opacity-20 uppercase tracking-[0.3em]">Verified AI Analysis</div>
+                                    <footer className="mt-auto pt-6 border-t border-black/5 flex justify-between items-end">
+                                        <div className="text-[8px] font-black opacity-20 uppercase tracking-[0.2em]">Yi Jing AI Lab</div>
+                                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: data.aesthetic_guide.color_hex }}></div>
                                     </footer>
                                 </div>
-                                <div className="mt-10 flex flex-col items-center space-y-6">
-                                    <p className="text-white/40 text-[10px] font-bold tracking-[0.3em] uppercase">长按图片保存到相册</p>
-                                    <button onClick={() => setShowPoster(false)} className="w-14 h-14 rounded-full bg-white/10 text-white flex items-center justify-center hover:bg-white/20"><Icons.Close /></button>
-                                </div>
+                                <p className="text-white/40 text-[9px] mt-10 tracking-[0.4em] font-bold uppercase">长按截图保存结果</p>
+                                <button onClick={() => setShowPoster(false)} className="mt-8 w-12 h-12 rounded-full bg-white/10 text-white flex items-center justify-center active:scale-90 border border-white/10"><Icons.Close /></button>
                             </div>
                         )}
                     </div>
