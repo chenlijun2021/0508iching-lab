@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>卦象实验室</title>
+    <title>易经美学实验室</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&family=IBM+Plex+Mono:wght@400;500&display=swap');
@@ -25,10 +25,9 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // ==========================================
-        // ⚠️ 请在此填入你的 API Key
-        // ==========================================
-        const apiKey = "AIzaSyCYKMGDDcji7woHeGjsyxnUkSJ7IBGf1P0"; 
+        // 系统强制使用的 API 配置
+        const apiKey = ""; // 留空，系统会自动注入
+        const MODEL_ID = "gemini-2.5-flash-preview-09-2025";
 
         function App() {
             const [step, setStep] = useState('entry');
@@ -52,67 +51,69 @@
                             canvas.height = img.height * scale;
                             const ctx = canvas.getContext('2d');
                             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                            resolve(canvas.toDataURL('image/jpeg', 0.7).split(',')[1]);
+                            resolve(canvas.toDataURL('image/jpeg', 0.8).split(',')[1]);
                         };
                     };
                 });
             };
 
-            const callAPI = async (base64Data) => {
-                // 修正为更通用的模型标识符
-                const modelName = "gemini-1.5-flash-latest"; 
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+            const callWithRetry = async (base64Data, retries = 5, delay = 1000) => {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${apiKey}`;
                 
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [
-                                { text: "你是一个专业的易经美学大师。分析这张手掌照片的易经卦象。请严格以 JSON 格式返回，不要包含 markdown 代码块标记或任何解释文字。格式必须为：{\"hexagram\":\"卦名\",\"core_insight\":\"100字核心解析\",\"poster_quote\":\"一句话金句\",\"aesthetic_guide\":{\"color_hex\":\"#HEX颜色\",\"outfit_detail\":\"穿戴建议\",\"vibe\":\"气质词\"}}" },
-                                { inlineData: { mimeType: "image/jpeg", data: base64Data } }
-                            ]
-                        }]
-                    })
-                });
-
-                if (!response.ok) {
-                    const err = await response.json();
-                    throw new Error(err.error?.message || "请求失败");
-                }
-                
-                const res = await response.json();
-                const text = res.candidates?.[0]?.content?.parts?.[0]?.text;
-                
-                // 增强 JSON 提取逻辑，防止模型返回包含 ```json 的 markdown 格式
-                try {
-                    const jsonMatch = text.match(/\{[\s\S]*\}/);
-                    if (jsonMatch) {
-                        return JSON.parse(jsonMatch[0]);
+                const payload = {
+                    contents: [{
+                        parts: [
+                            { text: "你是一个专业的易经美学大师。分析这张手掌照片的易经卦象。请严格以 JSON 格式返回，包含：hexagram(卦名), core_insight(100字解析), poster_quote(金句), aesthetic_guide(包含color_hex, outfit_detail, vibe)。" },
+                            { inlineData: { mimeType: "image/jpeg", data: base64Data } }
+                        ]
+                    }],
+                    generationConfig: {
+                        responseMimeType: "application/json"
                     }
-                    throw new Error("未能解析返回的 JSON 数据");
-                } catch (e) {
-                    console.error("JSON Parse Error:", text);
-                    throw new Error("模型返回格式错误，请重试");
+                };
+
+                for (let i = 0; i < retries; i++) {
+                    try {
+                        const response = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (response.ok) {
+                            const res = await response.json();
+                            const text = res.candidates?.[0]?.content?.parts?.[0]?.text;
+                            return JSON.parse(text);
+                        }
+
+                        // 如果是模型找不到或不支持的错误，直接抛出不重试
+                        if (response.status === 404) {
+                            const err = await response.json();
+                            throw new Error(err.error?.message || "Model not found");
+                        }
+
+                    } catch (err) {
+                        if (i === retries - 1) throw err;
+                        await new Promise(r => setTimeout(r, delay * Math.pow(2, i)));
+                    }
                 }
             };
 
             const handleUpload = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
-                if (!apiKey) { setErrorMsg("API Key 未配置"); return; }
 
                 setLoading(true);
                 setErrorMsg('');
                 
                 try {
                     const base64 = await compressImage(file);
-                    const result = await callAPI(base64);
+                    const result = await callWithRetry(base64);
                     setData(result);
                     setStep('report');
                 } catch (err) {
                     console.error(err);
-                    setErrorMsg(`解析失败: ${err.message}`);
+                    setErrorMsg(`分析失败: ${err.message}`);
                 } finally {
                     setLoading(false);
                 }
@@ -125,7 +126,7 @@
                         {errorMsg && (
                             <div className="absolute top-10 left-6 right-6 bg-red-50 text-red-600 text-xs p-4 rounded-2xl z-[100] animate-fade-in border border-red-100 flex justify-between items-center">
                                 <span className="flex-1 pr-2">{errorMsg}</span>
-                                <button onClick={() => setErrorMsg('')} className="font-bold uppercase tracking-widest text-[10px] flex-shrink-0">关闭</button>
+                                <button onClick={() => setErrorMsg('')} className="font-bold uppercase tracking-widest text-[10px]">关闭</button>
                             </div>
                         )}
 
@@ -137,45 +138,48 @@
                         <main className="flex-1 p-8 flex flex-col">
                             {step === 'entry' ? (
                                 <div className="flex-1 flex flex-col justify-center animate-fade-in">
-                                    <div onClick={() => !loading && fileInputRef.current.click()} className={`w-full aspect-square border-2 border-dashed border-black/10 rounded-[3rem] flex flex-col items-center justify-center relative transition-all ${loading ? 'bg-gray-50' : 'hover:bg-gray-50 cursor-pointer active:scale-95'}`}>
+                                    <div 
+                                        onClick={() => !loading && fileInputRef.current.click()} 
+                                        className={`w-full aspect-square border-2 border-dashed border-black/10 rounded-[3rem] flex flex-col items-center justify-center relative transition-all ${loading ? 'bg-gray-50' : 'hover:bg-gray-50 cursor-pointer active:scale-95'}`}
+                                    >
                                         {loading ? (
                                             <div className="text-center space-y-4">
                                                 <div className="w-8 h-8 border-4 border-black border-t-transparent rounded-full animate-spin mx-auto"></div>
-                                                <p className="text-[10px] font-bold tracking-widest uppercase animate-pulse">正在连接量子算力...</p>
+                                                <p className="text-[10px] font-bold tracking-widest uppercase animate-pulse">正在读取卦象...</p>
                                                 <div className="absolute inset-0 bg-gradient-to-b from-transparent via-black/5 to-transparent h-1 w-full animate-scan-y"></div>
                                             </div>
                                         ) : (
                                             <div className="text-center opacity-20">
                                                 <div className="text-4xl mb-4">＋</div>
-                                                <div className="text-[10px] font-black tracking-[0.2em] uppercase">上传手相图片</div>
+                                                <div className="text-[10px] font-black tracking-[0.2em] uppercase">上传手掌照片</div>
                                             </div>
                                         )}
                                     </div>
                                     <input type="file" ref={fileInputRef} className="hidden" onChange={handleUpload} accept="image/*" />
                                 </div>
                             ) : (
-                                <div className="animate-fade-in space-y-8 overflow-y-auto pr-2">
+                                <div className="animate-fade-in space-y-8 overflow-y-auto pr-2 custom-scrollbar">
                                     <div>
                                         <div className="text-[9px] font-bold opacity-30 tracking-[0.2em] uppercase mb-2">Analysis Result</div>
-                                        <h3 className="text-5xl font-black">{data.hexagram}卦</h3>
+                                        <h3 className="text-5xl font-black">{data?.hexagram}卦</h3>
                                     </div>
                                     <div className="space-y-2">
                                         <div className="w-8 h-1 bg-black"></div>
-                                        <p className="text-sm leading-relaxed text-gray-600 font-medium">{data.core_insight}</p>
+                                        <p className="text-sm leading-relaxed text-gray-600 font-medium">{data?.core_insight}</p>
                                     </div>
                                     <div className="p-6 rounded-[2rem] bg-gray-50 space-y-4">
                                         <div className="flex justify-between items-center">
-                                            <div className="w-10 h-10 rounded-full shadow-inner" style={{backgroundColor: data.aesthetic_guide.color_hex}}></div>
-                                            <span className="text-[10px] font-mono font-bold opacity-40">{data.aesthetic_guide.color_hex}</span>
+                                            <div className="w-10 h-10 rounded-full shadow-inner" style={{backgroundColor: data?.aesthetic_guide?.color_hex || '#000'}}></div>
+                                            <span className="text-[10px] font-mono font-bold opacity-40">{data?.aesthetic_guide?.color_hex}</span>
                                         </div>
                                         <div className="grid grid-cols-2 gap-4">
                                             <div>
                                                 <span className="text-[9px] font-bold opacity-30 uppercase">气质建议</span>
-                                                <p className="text-xs font-bold mt-1">{data.aesthetic_guide.vibe}</p>
+                                                <p className="text-xs font-bold mt-1">{data?.aesthetic_guide?.vibe}</p>
                                             </div>
                                             <div>
-                                                <span className="text-[9px] font-bold opacity-30 uppercase">穿搭指南</span>
-                                                <p className="text-xs font-bold mt-1">{data.aesthetic_guide.outfit_detail}</p>
+                                                <span className="text-[9px] font-bold opacity-30 uppercase">穿戴指南</span>
+                                                <p className="text-xs font-bold mt-1">{data?.aesthetic_guide?.outfit_detail}</p>
                                             </div>
                                         </div>
                                     </div>
