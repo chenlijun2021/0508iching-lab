@@ -7,12 +7,28 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&family=IBM+Plex+Mono:wght@400;500&display=swap');
-        body { font-family: 'Inter', -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; background-color: #F5F5F5; overflow: hidden; }
+        body { font-family: 'Inter', -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; background-color: #F8F8F8; overflow: hidden; }
         .font-mono { font-family: 'IBM Plex Mono', monospace; }
-        @keyframes scanY { 0% { top: 0%; opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { top: 100%; opacity: 0; } }
+        
+        /* 扫描动画 */
+        @keyframes scanY { 
+            0% { top: 0%; opacity: 0; } 
+            10% { opacity: 1; } 
+            90% { opacity: 1; } 
+            100% { top: 100%; opacity: 0; } 
+        }
         .animate-scan-y { animation: scanY 2.5s ease-in-out infinite; }
-        .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* 渐入动画 */
+        .animate-fade-in { animation: fadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        @keyframes fadeIn { 
+            from { opacity: 0; transform: translateY(20px); } 
+            to { opacity: 1; transform: translateY(0); } 
+        }
+
+        /* 隐藏滚动条 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
 </head>
 <body class="h-full">
@@ -25,8 +41,7 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // 系统强制使用的 API 配置
-        const apiKey = ""; // 留空，系统会自动注入
+        const apiKey = ""; 
         const MODEL_ID = "gemini-2.5-flash-preview-09-2025";
 
         function App() {
@@ -35,6 +50,14 @@
             const [data, setData] = useState(null);
             const [errorMsg, setErrorMsg] = useState('');
             const fileInputRef = useRef(null);
+
+            // 清理 JSON 字符串中的 Markdown 标记
+            const cleanJsonResponse = (text) => {
+                let cleaned = text.trim();
+                // 移除可能的 ```json ... ``` 或 ``` ... ```
+                cleaned = cleaned.replace(/^```[a-z]*\n/i, "").replace(/\n```$/i, "");
+                return cleaned;
+            };
 
             const compressImage = (file) => {
                 return new Promise((resolve) => {
@@ -45,7 +68,7 @@
                         img.src = e.target.result;
                         img.onload = () => {
                             const canvas = document.createElement('canvas');
-                            const MAX_WIDTH = 800; 
+                            const MAX_WIDTH = 1000; 
                             const scale = MAX_WIDTH / img.width;
                             canvas.width = MAX_WIDTH;
                             canvas.height = img.height * scale;
@@ -57,13 +80,29 @@
                 });
             };
 
-            const callWithRetry = async (base64Data, retries = 5, delay = 1000) => {
+            const callAI = async (base64Data, retries = 5) => {
                 const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${apiKey}`;
                 
+                const prompt = `你是一个融合了中国古代哲学与现代极简主义的易经美学大师。
+                请分析这张手掌照片的纹路与生命力，给出对应的易经卦象。
+                
+                必须严格返回 JSON 格式，不要包含任何 Markdown 代码块标签，字段如下：
+                {
+                    "hexagram": "卦名(如：乾、坤、泰等)",
+                    "core_insight": "一段关于此卦象与手相结合的深度解析(80-100字)",
+                    "poster_quote": "一句具有哲理的美学金句",
+                    "aesthetic_guide": {
+                        "color_hex": "一个符合该卦象意境的十六进制颜色代码",
+                        "color_name": "颜色的中文意境名",
+                        "vibe": "气质关键词(3个，逗号隔开)",
+                        "outfit_detail": "具体的穿搭或配饰建议"
+                    }
+                }`;
+
                 const payload = {
                     contents: [{
                         parts: [
-                            { text: "你是一个专业的易经美学大师。分析这张手掌照片的易经卦象。请严格以 JSON 格式返回，包含：hexagram(卦名), core_insight(100字解析), poster_quote(金句), aesthetic_guide(包含color_hex, outfit_detail, vibe)。" },
+                            { text: prompt },
                             { inlineData: { mimeType: "image/jpeg", data: base64Data } }
                         ]
                     }],
@@ -80,21 +119,17 @@
                             body: JSON.stringify(payload)
                         });
 
-                        if (response.ok) {
-                            const res = await response.json();
-                            const text = res.candidates?.[0]?.content?.parts?.[0]?.text;
-                            return JSON.parse(text);
-                        }
+                        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
 
-                        // 如果是模型找不到或不支持的错误，直接抛出不重试
-                        if (response.status === 404) {
-                            const err = await response.json();
-                            throw new Error(err.error?.message || "Model not found");
-                        }
+                        const res = await response.json();
+                        const rawText = res.candidates?.[0]?.content?.parts?.[0]?.text;
+                        if (!rawText) throw new Error("Empty response from AI");
 
+                        const cleanedJson = cleanJsonResponse(rawText);
+                        return JSON.parse(cleanedJson);
                     } catch (err) {
                         if (i === retries - 1) throw err;
-                        await new Promise(r => setTimeout(r, delay * Math.pow(2, i)));
+                        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
                     }
                 }
             };
@@ -108,90 +143,118 @@
                 
                 try {
                     const base64 = await compressImage(file);
-                    const result = await callWithRetry(base64);
+                    const result = await callAI(base64);
                     setData(result);
                     setStep('report');
                 } catch (err) {
-                    console.error(err);
-                    setErrorMsg(`分析失败: ${err.message}`);
+                    console.error("Analysis Error:", err);
+                    setErrorMsg(`解析中断：请确保上传了清晰的手掌照片并稍后重试。(${err.message})`);
                 } finally {
                     setLoading(false);
                 }
             };
 
             return (
-                <div className="fixed inset-0 bg-[#F5F5F5] flex items-center justify-center p-4">
-                    <div className="w-full max-w-[400px] h-[750px] bg-white rounded-[2.5rem] shadow-2xl relative flex flex-col overflow-hidden border border-black/5">
+                <div className="fixed inset-0 bg-[#F0F0F0] flex items-center justify-center p-0 sm:p-4">
+                    {/* 手机容器模拟 */}
+                    <div className="w-full h-full sm:w-[400px] sm:h-[800px] bg-white sm:rounded-[3rem] shadow-2xl relative flex flex-col overflow-hidden border border-black/5">
                         
+                        {/* 状态通知 */}
                         {errorMsg && (
-                            <div className="absolute top-10 left-6 right-6 bg-red-50 text-red-600 text-xs p-4 rounded-2xl z-[100] animate-fade-in border border-red-100 flex justify-between items-center">
-                                <span className="flex-1 pr-2">{errorMsg}</span>
-                                <button onClick={() => setErrorMsg('')} className="font-bold uppercase tracking-widest text-[10px]">关闭</button>
+                            <div className="absolute top-12 left-6 right-6 bg-red-50 text-red-600 text-[11px] p-4 rounded-2xl z-[100] animate-fade-in border border-red-100 shadow-sm flex justify-between items-center">
+                                <span className="flex-1 font-medium">{errorMsg}</span>
+                                <button onClick={() => setErrorMsg('')} className="ml-4 font-black uppercase tracking-widest text-[10px]">Close</button>
                             </div>
                         )}
 
-                        <header className="pt-12 px-8 pb-4">
-                            <h2 className="text-[10px] font-black tracking-[0.3em] uppercase opacity-30 mb-1">Aesthetic Lab</h2>
-                            <h1 className="text-2xl font-black tracking-tighter">易经美学实验室</h1>
+                        {/* 头部 */}
+                        <header className="pt-16 px-10 pb-6 shrink-0">
+                            <h2 className="text-[10px] font-black tracking-[0.4em] uppercase opacity-20 mb-1">Aesthetic Lab</h2>
+                            <h1 className="text-3xl font-black tracking-tighter">易经美学实验室</h1>
                         </header>
 
-                        <main className="flex-1 p-8 flex flex-col">
+                        {/* 主内容区 */}
+                        <main className="flex-1 px-10 flex flex-col overflow-hidden">
                             {step === 'entry' ? (
-                                <div className="flex-1 flex flex-col justify-center animate-fade-in">
+                                <div className="flex-1 flex flex-col justify-center animate-fade-in pb-10">
                                     <div 
                                         onClick={() => !loading && fileInputRef.current.click()} 
-                                        className={`w-full aspect-square border-2 border-dashed border-black/10 rounded-[3rem] flex flex-col items-center justify-center relative transition-all ${loading ? 'bg-gray-50' : 'hover:bg-gray-50 cursor-pointer active:scale-95'}`}
+                                        className={`w-full aspect-[4/5] border-2 border-dashed border-black/5 rounded-[2.5rem] flex flex-col items-center justify-center relative transition-all duration-500 ${loading ? 'bg-gray-50' : 'hover:border-black/20 cursor-pointer active:scale-[0.98]'}`}
                                     >
                                         {loading ? (
-                                            <div className="text-center space-y-4">
-                                                <div className="w-8 h-8 border-4 border-black border-t-transparent rounded-full animate-spin mx-auto"></div>
-                                                <p className="text-[10px] font-bold tracking-widest uppercase animate-pulse">正在读取卦象...</p>
+                                            <div className="text-center space-y-6">
+                                                <div className="relative">
+                                                    <div className="w-16 h-16 border-[3px] border-black/5 border-t-black rounded-full animate-spin mx-auto"></div>
+                                                    <div className="absolute inset-0 flex items-center justify-center text-[10px] font-bold">AI</div>
+                                                </div>
+                                                <p className="text-[10px] font-black tracking-[0.3em] uppercase animate-pulse">正在窥探天机...</p>
                                                 <div className="absolute inset-0 bg-gradient-to-b from-transparent via-black/5 to-transparent h-1 w-full animate-scan-y"></div>
                                             </div>
                                         ) : (
-                                            <div className="text-center opacity-20">
-                                                <div className="text-4xl mb-4">＋</div>
-                                                <div className="text-[10px] font-black tracking-[0.2em] uppercase">上传手掌照片</div>
+                                            <div className="text-center group">
+                                                <div className="w-16 h-16 rounded-full bg-black text-white flex items-center justify-center text-2xl mb-6 group-hover:scale-110 transition-transform">＋</div>
+                                                <div className="text-[11px] font-black tracking-[0.2em] uppercase opacity-40">上传手掌相片</div>
+                                                <div className="text-[9px] mt-2 opacity-20 font-medium">Capture your palm line</div>
                                             </div>
                                         )}
                                     </div>
                                     <input type="file" ref={fileInputRef} className="hidden" onChange={handleUpload} accept="image/*" />
                                 </div>
                             ) : (
-                                <div className="animate-fade-in space-y-8 overflow-y-auto pr-2 custom-scrollbar">
-                                    <div>
-                                        <div className="text-[9px] font-bold opacity-30 tracking-[0.2em] uppercase mb-2">Analysis Result</div>
-                                        <h3 className="text-5xl font-black">{data?.hexagram}卦</h3>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <div className="w-8 h-1 bg-black"></div>
-                                        <p className="text-sm leading-relaxed text-gray-600 font-medium">{data?.core_insight}</p>
-                                    </div>
-                                    <div className="p-6 rounded-[2rem] bg-gray-50 space-y-4">
-                                        <div className="flex justify-between items-center">
-                                            <div className="w-10 h-10 rounded-full shadow-inner" style={{backgroundColor: data?.aesthetic_guide?.color_hex || '#000'}}></div>
-                                            <span className="text-[10px] font-mono font-bold opacity-40">{data?.aesthetic_guide?.color_hex}</span>
+                                <div className="animate-fade-in space-y-10 py-4 no-scrollbar overflow-y-auto">
+                                    {/* 卦象结果 */}
+                                    <section>
+                                        <div className="text-[10px] font-black opacity-20 tracking-[0.3em] uppercase mb-4">The Hexagram</div>
+                                        <div className="flex items-baseline gap-2">
+                                            <h3 className="text-7xl font-black tracking-tighter">{data?.hexagram}</h3>
+                                            <span className="text-xl font-bold opacity-30">卦</span>
                                         </div>
-                                        <div className="grid grid-cols-2 gap-4">
+                                    </section>
+
+                                    {/* 解析 */}
+                                    <section className="space-y-4">
+                                        <div className="w-12 h-1.5 bg-black"></div>
+                                        <p className="text-[15px] leading-relaxed text-black/70 font-medium italic">“{data?.poster_quote}”</p>
+                                        <p className="text-xs leading-loose text-black/50 font-medium text-justify">{data?.core_insight}</p>
+                                    </section>
+
+                                    {/* 美学指南卡片 */}
+                                    <section className="p-8 rounded-[2.5rem] bg-gray-50 border border-black/5 space-y-8 mb-6">
+                                        <div className="flex justify-between items-start">
                                             <div>
-                                                <span className="text-[9px] font-bold opacity-30 uppercase">气质建议</span>
-                                                <p className="text-xs font-bold mt-1">{data?.aesthetic_guide?.vibe}</p>
+                                                <div className="text-[9px] font-black opacity-30 uppercase tracking-widest mb-1">Color Palette</div>
+                                                <div className="font-bold text-sm uppercase">{data?.aesthetic_guide?.color_name}</div>
                                             </div>
-                                            <div>
-                                                <span className="text-[9px] font-bold opacity-30 uppercase">穿戴指南</span>
-                                                <p className="text-xs font-bold mt-1">{data?.aesthetic_guide?.outfit_detail}</p>
+                                            <div className="text-right">
+                                                <div className="w-12 h-12 rounded-2xl shadow-lg border-2 border-white" style={{backgroundColor: data?.aesthetic_guide?.color_hex}}></div>
+                                                <div className="text-[9px] font-mono mt-1 opacity-40 font-bold uppercase">{data?.aesthetic_guide?.color_hex}</div>
                                             </div>
                                         </div>
-                                    </div>
+
+                                        <div className="grid grid-cols-1 gap-6">
+                                            <div className="space-y-1">
+                                                <span className="text-[9px] font-black opacity-20 uppercase tracking-tighter text-black">Vibe Checklist</span>
+                                                <p className="text-[11px] font-bold tracking-wide">{data?.aesthetic_guide?.vibe}</p>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <span className="text-[9px] font-black opacity-20 uppercase tracking-tighter text-black">Style Guide</span>
+                                                <p className="text-[11px] font-bold leading-relaxed">{data?.aesthetic_guide?.outfit_detail}</p>
+                                            </div>
+                                        </div>
+                                    </section>
                                 </div>
                             )}
                         </main>
 
-                        {step === 'report' && (
-                            <footer className="p-8 pt-0">
-                                <button onClick={() => setStep('entry')} className="w-full h-14 bg-black text-white rounded-2xl text-[11px] font-black tracking-[0.2em] uppercase active:scale-95 transition-transform shadow-lg">重新解析</button>
-                            </footer>
-                        )}
+                        {/* 底部操作 */}
+                        <footer className={`p-10 transition-all duration-700 ${step === 'report' ? 'translate-y-0 opacity-100' : 'translate-y-10 opacity-0'}`}>
+                            <button 
+                                onClick={() => setStep('entry')} 
+                                className="w-full h-16 bg-black text-white rounded-[1.25rem] text-[11px] font-black tracking-[0.3em] uppercase active:scale-95 transition-all shadow-xl hover:shadow-black/20"
+                            >
+                                Re-Analysis / 重新解析
+                            </button>
+                        </footer>
                     </div>
                 </div>
             );
